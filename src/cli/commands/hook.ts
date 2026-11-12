@@ -47,6 +47,7 @@ import {
 import { ownerTurnsLine, ownerTurnsText, type OwnerTurn } from '../../refresh/owner-turns.ts';
 import { carryLines, carryStartOf, readCarry, type CarriedCron, type Carry, type CarryPlaces, type CarryStart } from '../../refresh/carry.ts';
 import { claudeProcessOf } from '../../refresh/restart.ts';
+import { firedBySchedule } from '../../refresh/scheduled-prompt.ts';
 import { RefreshStore } from '../../refresh/store.ts';
 import { readContextTokens } from '../../refresh/usage.ts';
 import { noPositionals, type ParsedArgs } from '../args.ts';
@@ -306,7 +307,9 @@ export async function inboxReminder(args: ParsedArgs, runtime: CliRuntime): Prom
   if (session !== undefined) {
     await logPrompt(runtime, { config, paths: kit.paths, id: session }, payload).catch(() => undefined);
   }
-  const cancelled = session === undefined ? undefined : await cancelledRestartLine(runtime, kit, session, sessionRefreshOf(config, session)).catch(() => undefined);
+  // A scheduled job's prompt is no one typing: it leaves the restart armed, which waits for the turn it starts to end.
+  const scheduled = session !== undefined && (await firedBySchedule(runtime.files, isRecord(payload) ? stringField(payload, 'transcript_path') : undefined));
+  const cancelled = session === undefined || scheduled ? undefined : await cancelledRestartLine(runtime, kit, session, sessionRefreshOf(config, session)).catch(() => undefined);
   const budgetLine = session === undefined ? undefined : await promptBudgetLine(runtime, { kit, config, roster: own.roster, id: session }).catch(() => undefined);
   // Like the inbox lines below, reading the digest moves its cursor, so it is read late; only a leader gets one.
   const digest = session === undefined ? undefined : await leaderDigestText(runtime, kit.paths, config, session).catch(() => undefined);
