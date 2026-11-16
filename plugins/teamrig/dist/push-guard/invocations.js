@@ -1,4 +1,5 @@
 import { packagedStartOf } from "../package-guard/packaged.js";
+import { interpreterDoubt, interpreterOf, interpreterText, readScriptFile, scriptMayPush } from "./interpreters.js";
 import { isAssignment, launch, programName, staticWord } from "./launchers.js";
 import { bashNativeWord, Location, resolveDir } from "./location.js";
 import { splitGitAlias } from "./program-split.js";
@@ -150,6 +151,15 @@ export function configWrite(args) {
     }
     return value === undefined ? undefined : { kind: 'set', key, value };
 }
+/** A command's terminator that pipes its output to the next command, a newline or two after it. */
+const PIPE_TERMINATOR = /^\|&?\n*$/;
+/**
+ * True when what `command` prints goes on to another command: down a pipe (`|`, `|&`, also from a `( )` group the
+ * command ends), or into the command holding the substitution it sits in.
+ */
+function outputFeedsCommand(command) {
+    return command.nesting > 0 || PIPE_TERMINATOR.test(command.terminator.replace(/[()]/g, ''));
+}
 /** Quotes a word for a bash command line, so a git shell alias gets its arguments as typed. */
 function shellQuote(word) {
     return word.dynamic ? word.text : `'${word.text.replace(/'/g, `'\\''`)}'`;
@@ -240,7 +250,6 @@ class GitInvocationFinder {
         const commands = dialect === 'bash' ? resolveLiteralVariables(parsed, depth === 0 ? location.home : undefined) : parsed.commands;
         let piped;
         for (const command of commands) {
-            command.words.forEach((word) => this.mention(word.text));
             let stdin = command.stdin;
             // A substitution's commands, read before the command that holds them, sit between a pipe's two ends.
             if (piped !== undefined && command.nesting <= piped.nesting) {
@@ -249,13 +258,21 @@ class GitInvocationFinder {
             }
             location.enter(command.subshells);
             const launched = this.visitCommand(command.words, dialect, location, depth, stdin);
+            // An interpreter's words and stdin are its script, judged by visitCommand, not shell words that name a push:
+            // a python heredoc that posts a message saying "push" arms no doubt about the line. Its output feeding another
+            // command (a pipe, a substitution) may be shell code it prints, so there its words and stdin still name a push
+            // for the gated doubts that command raises (`python3 -c 'print("git push ...")' | sh`).
+            const script = launched?.kind === 'program' && interpreterOf(launched) !== undefined && !outputFeedsCommand(command);
+            if (!script) {
+                command.words.forEach((word) => this.mention(word.text));
+            }
             // A shell that runs a word as a script reads its substitutions as commands already.
             if (launched?.kind !== 'script') {
                 this.visitHeld(command.words, location, depth);
             }
             if (stdin !== undefined) {
                 const use = launched === undefined ? 'read' : stdinUse(command, launched);
-                if (use !== 'stored') {
+                if (use !== 'stored' && !script) {
                     this.mention(stdin.text);
                 }
                 piped = use === 'passed' ? { body: stdin, nesting: command.nesting } : undefined;
@@ -318,6 +335,16 @@ class GitInvocationFinder {
                 const packaged = packagedStartOf(name, launched.args, launched.env);
                 if (packaged.length > 0) {
                     this.visitPackaged(packaged, launched, dialect, location, depth, stdin);
+                    break;
+                }
+                const language = interpreterOf(launched);
+                if (language !== undefined) {
+                    const inner = location.child();
+                    launched.chdirs.forEach((chdir) => inner.moveTo(chdir, dialect));
+                    const text = interpreterText(launched, stdin, inner.dir, this.context.readScript ?? readScriptFile);
+                    if (scriptMayPush(text, language)) {
+                        this.doubt(interpreterDoubt(language), false);
+                    }
                     break;
                 }
                 const subcommand = name.startsWith('git-') ? name.slice(4) : undefined;
