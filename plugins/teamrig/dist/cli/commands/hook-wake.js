@@ -361,7 +361,7 @@ export async function wakeCheck(args, runtime) {
         return answer(runtime, waitAnswer(scope, null));
     }
     const restarts = new RefreshStore(runtime.files, kit.paths);
-    const rearm = { team: kit.paths.team, id, tab, refresh: { enabled: config.refresh.enabled, autoRestart: autoRestartOf(config, id) }, cwd: isRecord(payload) ? stringField(payload, 'cwd') : undefined };
+    const rearm = { team: kit.paths.team, id, tab, refresh: { enabled: config.refresh.enabled, autoRestart: autoRestartOf(config, id) }, cwd: isRecord(payload) ? stringField(payload, 'cwd') : undefined, paths: kit.paths, ids: scope.roster.ids };
     if (await restartHoldsWake(runtime, restarts, rearm)) {
         return answer(runtime, waitAnswer(scope, runtime.clock.now() + RESTART_RECHECK_MS));
     }
